@@ -1,0 +1,276 @@
+"""
+Unbeatable Tic-Tac-Toe in your browser.
+Python backend (Minimax + Alpha-Beta Pruning), served on localhost. No installs needed.
+
+Run:   python tictactoe_web.py
+Open:  http://localhost:8000      (it also tries to open automatically)
+Stop:  Ctrl+C
+Other port: python tictactoe_web.py 9000
+"""
+import json
+import sys
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+AI, HUMAN, EMPTY = "O", "X", " "
+WIN_LINES = [(0, 1, 2), (3, 4, 5), (6, 7, 8),
+             (0, 3, 6), (1, 4, 7), (2, 5, 8),
+             (0, 4, 8), (2, 4, 6)]
+
+
+# ---------------------------------------------------------------- AI logic
+def check(b):
+    """Return (winner_or_None, winning_line_or_None)."""
+    for line in WIN_LINES:
+        a, c, d = line
+        if b[a] != EMPTY and b[a] == b[c] == b[d]:
+            return b[a], list(line)
+    return None, None
+
+
+def moves(b):
+    return [i for i, v in enumerate(b) if v == EMPTY]
+
+
+def minimax(b, is_ai_turn, alpha, beta, depth, counter):
+    counter[0] += 1
+    w, _ = check(b)
+    if w == AI:
+        return 10 - depth
+    if w == HUMAN:
+        return depth - 10
+    if EMPTY not in b:
+        return 0
+
+    if is_ai_turn:
+        best = -float("inf")
+        for m in moves(b):
+            b[m] = AI
+            best = max(best, minimax(b, False, alpha, beta, depth + 1, counter))
+            b[m] = EMPTY
+            alpha = max(alpha, best)
+            if beta <= alpha:
+                break
+        return best
+    best = float("inf")
+    for m in moves(b):
+        b[m] = HUMAN
+        best = min(best, minimax(b, True, alpha, beta, depth + 1, counter))
+        b[m] = EMPTY
+        beta = min(beta, best)
+        if beta <= alpha:
+            break
+    return best
+
+
+def best_move(b):
+    counter = [0]
+    best_score, choice = -float("inf"), None
+    for m in moves(b):
+        b[m] = AI
+        score = minimax(b, False, -float("inf"), float("inf"), 1, counter)
+        b[m] = EMPTY
+        if score > best_score:
+            best_score, choice = score, m
+    return choice, counter[0]
+
+
+def status_of(b):
+    w, line = check(b)
+    if w:
+        return w, line
+    if EMPTY not in b:
+        return "draw", None
+    return "playing", None
+
+
+def handle_move(board):
+    """Take the board from the browser, let the AI reply, return new state."""
+    if (not isinstance(board, list) or len(board) != 9
+            or any(c not in (HUMAN, AI, EMPTY) for c in board)):
+        raise ValueError("bad board")
+    nodes = 0
+    status, line = status_of(board)
+    if status == "playing":
+        m, nodes = best_move(board)
+        board[m] = AI
+        status, line = status_of(board)
+    return {"board": board, "status": status, "line": line, "nodes": nodes}
+
+
+# -------------------------------------------------------------- Web server
+PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unbeatable Tic-Tac-Toe</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#1d2433; --muted:#6b7385;
+          --x:#2563eb; --o:#e11d48; --line:#d9dde8; --win:#dcfce7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8;
+            --x:#60a5fa; --o:#fb7185; --line:#2c3347; --win:#14532d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center;
+         justify-content:center; background:var(--bg); color:var(--text);
+         font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .card { background:var(--card); padding:28px; border-radius:18px;
+          box-shadow:0 8px 30px rgba(0,0,0,.12); text-align:center; width:min(92vw,380px); }
+  h1 { margin:0 0 4px; font-size:1.4rem; }
+  .sub { color:var(--muted); font-size:.85rem; margin-bottom:16px; }
+  #status { font-size:1.1rem; font-weight:600; min-height:1.6em; margin-bottom:12px; }
+  #board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .cell { aspect-ratio:1; border:2px solid var(--line); background:transparent;
+          border-radius:12px; font-size:3rem; font-weight:700; cursor:pointer;
+          color:var(--text); transition:background .15s, transform .1s; }
+  .cell:hover:not(:disabled) { transform:scale(1.04); border-color:var(--muted); }
+  .cell:disabled { cursor:default; }
+  .cell.X { color:var(--x); } .cell.O { color:var(--o); }
+  .cell.win { background:var(--win); }
+  .row { display:flex; gap:8px; margin-top:16px; }
+  .row button { flex:1; padding:10px; border-radius:10px; border:1px solid var(--line);
+                background:transparent; color:var(--text); font-size:.9rem; cursor:pointer; }
+  .row button:hover { border-color:var(--muted); }
+  .row button.active { background:var(--x); color:#fff; border-color:var(--x); }
+  .stats { margin-top:14px; color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Tic-Tac-Toe</h1>
+  <div class="sub">Minimax + Alpha-Beta AI &mdash; try to beat it</div>
+  <div id="status"></div>
+  <div id="board"></div>
+  <div class="row">
+    <button id="goFirst" class="active">I go first (X)</button>
+    <button id="aiFirst">AI goes first</button>
+  </div>
+  <div class="stats">
+    You: <b id="sw">0</b> &nbsp; Draws: <b id="sd">0</b> &nbsp; AI: <b id="sl">0</b>
+    <div id="nodes"></div>
+  </div>
+</div>
+
+<script>
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+const nodesEl = document.getElementById("nodes");
+let board, busy, over, humanFirst = true;
+const score = { w: 0, d: 0, l: 0 };
+
+async function askAI() {
+  busy = true; statusEl.textContent = "AI is thinking...";
+  render();
+  const res = await fetch("/api/move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ board })
+  });
+  const data = await res.json();
+  board = data.board;
+  if (data.nodes) nodesEl.textContent = "AI searched " + data.nodes + " positions";
+  busy = false;
+  finish(data);
+}
+
+function finish(data) {
+  if (data.status === "playing") {
+    statusEl.textContent = "Your turn (X)";
+    over = false;
+  } else {
+    over = true;
+    if (data.status === "X") { statusEl.textContent = "You win!"; score.w++; }
+    else if (data.status === "O") { statusEl.textContent = "The AI wins"; score.l++; }
+    else { statusEl.textContent = "Draw"; score.d++; }
+    document.getElementById("sw").textContent = score.w;
+    document.getElementById("sd").textContent = score.d;
+    document.getElementById("sl").textContent = score.l;
+  }
+  render(data.line);
+}
+
+function render(line) {
+  boardEl.innerHTML = "";
+  board.forEach((v, i) => {
+    const b = document.createElement("button");
+    b.className = "cell" + (v.trim() ? " " + v : "") + (line && line.includes(i) ? " win" : "");
+    b.textContent = v.trim();
+    b.disabled = busy || over || v !== " ";
+    b.onclick = () => {
+      board[i] = "X";
+      askAI();
+    };
+    boardEl.appendChild(b);
+  });
+}
+
+function newGame() {
+  board = Array(9).fill(" ");
+  over = false; busy = false;
+  nodesEl.textContent = "";
+  if (humanFirst) { statusEl.textContent = "Your turn (X)"; render(); }
+  else askAI();
+}
+
+document.getElementById("goFirst").onclick = e => setFirst(true);
+document.getElementById("aiFirst").onclick = e => setFirst(false);
+function setFirst(h) {
+  humanFirst = h;
+  document.getElementById("goFirst").classList.toggle("active", h);
+  document.getElementById("aiFirst").classList.toggle("active", !h);
+  newGame();
+}
+newGame();
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        else:
+            self._send(404, b"Not found", "text/plain")
+
+    def do_POST(self):
+        if self.path != "/api/move":
+            return self._send(404, b"Not found", "text/plain")
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length))
+            result = handle_move(payload["board"])
+            self._send(200, json.dumps(result).encode(), "application/json")
+        except (ValueError, KeyError, json.JSONDecodeError):
+            self._send(400, b'{"error":"bad request"}', "application/json")
+
+    def log_message(self, fmt, *args):  # keep the console quiet
+        pass
+
+
+def main():
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://localhost:{port}"
+    print(f"Tic-Tac-Toe running at {url}  (Ctrl+C to stop)")
+    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
