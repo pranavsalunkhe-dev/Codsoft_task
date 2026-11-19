@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image captioner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #d9e2e8;
+    --paper: #f7f9fa;
+    --ink: #17283a;
+    --muted: #55677a;
+    --accent: #0f5c8c;
+    --line: #b4c2cd;
+    --error: #a3332b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101c28;
+      --paper: #1b2b3b;
+      --ink: #e6edf3;
+      --muted: #98a9b8;
+      --accent: #6bb8ea;
+      --line: #324859;
+      --error: #f08a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 16px/1.55 "Instrument Sans", system-ui, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 48px 20px 72px; }
+  h1 {
+    font: 600 clamp(2rem, 6vw, 2.9rem)/1.1 "Newsreader", Georgia, serif;
+    margin: 0 0 10px; letter-spacing: -0.01em;
+  }
+  .lede { margin: 0 0 28px; color: var(--muted); max-width: 52ch; }
+
+  .notice {
+    margin: 0 0 20px; padding: 12px 14px; border-left: 3px solid var(--error);
+    background: var(--paper); font-size: 0.93rem;
+  }
+  .notice code { font-size: 0.9em; }
+  .notice[hidden] { display: none; }
+
+  /* the print: photo on top, caption written in the bottom margin */
+  .print {
+    background: var(--paper); padding: 14px 14px 22px;
+    box-shadow: 0 1px 0 var(--line), 0 14px 30px -18px rgba(10, 30, 50, .5);
+  }
+  .frame {
+    position: relative; display: grid; place-items: center; min-height: 300px;
+    background: color-mix(in srgb, var(--ink) 6%, var(--paper));
+    outline: 1.5px dashed var(--line); outline-offset: -8px; cursor: pointer;
+    overflow: hidden; transition: outline-color .15s;
+  }
+  .frame:hover, .frame.over { outline-color: var(--accent); }
+  .frame:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .frame input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .frame img { display: block; width: 100%; max-height: 520px; object-fit: contain; }
+  .frame img[hidden] { display: none; }
+  .prompt { padding: 24px; text-align: center; color: var(--muted); }
+  .prompt strong { display: block; color: var(--ink); font: 600 1.15rem "Newsreader", serif; margin-bottom: 4px; }
+
+  .caption-area { min-height: 92px; padding: 18px 6px 0; }
+  .caption {
+    font: italic 400 clamp(1.3rem, 4.5vw, 1.7rem)/1.3 "Newsreader", Georgia, serif;
+    margin: 0; min-height: 1.3em;
+  }
+  .caption.empty { color: var(--muted); font-size: 1.1rem; }
+  .caption.error { color: var(--error); font-style: normal; font-size: 1rem; font-family: "Instrument Sans", sans-serif; }
+  .caret::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 2px; background: var(--accent); vertical-align: -0.12em; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .alts { margin: 14px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.93rem; }
+  .alts li { padding: 4px 0; border-top: 1px solid var(--line); }
+  .alts-title { margin: 16px 0 0; font-size: 0.85rem; color: var(--muted); }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; margin-top: 22px; }
+  fieldset { border: 0; margin: 0; padding: 0; display: flex; align-items: center; gap: 10px; }
+  legend { float: left; padding: 0; margin-right: 10px; font-size: 0.93rem; color: var(--muted); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg label { position: relative; padding: 6px 14px; cursor: pointer; font-size: 0.93rem; }
+  .seg input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--paper); }
+  .seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button {
+    font: 500 0.95rem "Instrument Sans", sans-serif; padding: 9px 18px; border-radius: 6px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--paper); cursor: pointer;
+  }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.quiet { background: transparent; color: var(--accent); }
+  .hint { margin: 10px 0 0; font-size: 0.85rem; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .caret::after { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Drop a photo. Get a caption.</h1>
+  <p class="lede">A ResNet-50 reads the image into a grid of visual features. A transformer decoder then writes the sentence one word at a time, looking back at that grid.</p>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <div class="print">
+    <label class="frame" id="frame">
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose an image">
+      <img id="preview" alt="Your uploaded photo" hidden>
+      <span class="prompt" id="prompt"><strong>Add a photo</strong>Drag one here, tap to browse, or paste from the clipboard.</span>
+    </label>
+    <div class="caption-area" aria-live="polite">
+      <p class="caption empty" id="caption">Your caption will appear here.</p>
+      <p class="alts-title" id="altsTitle" hidden>Other possible captions</p>
+      <ul class="alts" id="alts"></ul>
+    </div>
+  </div>
+
+  <div class="controls">
+    <fieldset>
+      <legend>Beam width</legend>
+      <div class="seg">
+        <label><input type="radio" name="beam" value="1">1</label>
+        <label><input type="radio" name="beam" value="3" checked>3</label>
+        <label><input type="radio" name="beam" value="5">5</label>
+      </div>
+    </fieldset>
+    <button id="go" disabled>Caption photo</button>
+    <button id="clear" class="quiet" hidden>Clear</button>
+  </div>
+  <p class="hint">Wider beams search more sentence options. They are slower and usually read more fluently.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const file = $("file"), frame = $("frame"), preview = $("preview"), prompt_ = $("prompt");
+const caption = $("caption"), alts = $("alts"), altsTitle = $("altsTitle");
+const go = $("go"), clear = $("clear"), notice = $("notice");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let current = null, typing = null, modelReady = true;
+
+fetch("/api/health").then(r => r.json()).then(h => {
+  modelReady = h.ready;
+  if (!h.ready) {
+    notice.hidden = false;
+    notice.innerHTML = "The model isn't trained yet. Run <code>python train.py</code>, then restart this server. " + (h.error ? "(" + h.error + ")" : "");
+  }
+  refresh();
+}).catch(() => { notice.hidden = false; notice.textContent = "Can't reach the server."; });
+
+function refresh() { go.disabled = !current || !modelReady; clear.hidden = !current; }
+
+function setImage(f) {
+  if (!f || !/^image\/(jpeg|png|webp)$/.test(f.type)) return say("Choose a JPG, PNG or WebP image.", "error");
+  current = f;
+  preview.src = URL.createObjectURL(f);
+  preview.hidden = false; prompt_.hidden = true;
+  alts.innerHTML = ""; altsTitle.hidden = true;
+  say("Ready. Press Caption photo.", "empty");
+  refresh();
+}
+
+function say(text, cls = "") { clearInterval(typing); caption.className = "caption " + cls; caption.textContent = text; }
+
+function typeOut(text) {
+  clearInterval(typing);
+  caption.className = "caption";
+  if (reduceMotion) { caption.textContent = text; return; }
+  caption.classList.add("caret"); caption.textContent = "";
+  let i = 0;
+  typing = setInterval(() => {
+    caption.textContent = text.slice(0, ++i);
+    if (i >= text.length) { clearInterval(typing); caption.classList.remove("caret"); }
+  }, 32);
+}
+
+file.addEventListener("change", () => setImage(file.files[0]));
+["dragenter", "dragover"].forEach(e => frame.addEventListener(e, ev => { ev.preventDefault(); frame.classList.add("over"); }));
+["dragleave", "drop"].forEach(e => frame.addEventListener(e, ev => { ev.preventDefault(); frame.classList.remove("over"); }));
+frame.addEventListener("drop", ev => setImage(ev.dataTransfer.files[0]));
+addEventListener("paste", ev => { const f = [...(ev.clipboardData?.files || [])][0]; if (f) setImage(f); });
+
+go.addEventListener("click", async () => {
+  go.disabled = true; say("Reading the image…", "empty caret");
+  const body = new FormData();
+  body.append("image", current);
+  body.append("beam", document.querySelector("input[name=beam]:checked").value);
+  try {
+    const res = await fetch("/api/caption", { method: "POST", body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Something went wrong.");
+    typeOut(data.caption.charAt(0).toUpperCase() + data.caption.slice(1) + ".");
+    alts.innerHTML = "";
+    data.alternatives.forEach(a => { const li = document.createElement("li"); li.textContent = a; alts.appendChild(li); });
+    altsTitle.hidden = data.alternatives.length === 0;
+  } catch (err) {
+    say(err.message, "error");
+  } finally { refresh(); }
+});
+
+clear.addEventListener("click", () => {
+  current = null; file.value = ""; preview.hidden = true; prompt_.hidden = false;
+  alts.innerHTML = ""; altsTitle.hidden = true;
+  say("Your caption will appear here.", "empty"); refresh();
+});
+</script>
+</body>
+</html>
